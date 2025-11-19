@@ -202,12 +202,6 @@ userEvents.forEach(ev => {
     window.addEventListener(ev, loadAd, { once: true });
 });
 
-// Untuk iPhone/iPad agar tidak reload dua kali saat back-forward cache
-window.addEventListener('pageshow', function(e) {
-    if (e.persisted) {
-        adLoaded = false;
-    }
-});
 </script>
 
 </body>
