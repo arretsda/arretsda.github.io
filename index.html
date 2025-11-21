@@ -181,5 +181,23 @@ a:hover,a:focus{
   © 2025 arretsda — Semua hak cipta dilindungi.
 </footer>
 
+<script>
+var adLoaded = false;
+function loadAd() {
+    if (adLoaded) return;
+    adLoaded = true;
+    var s = document.createElement('script');
+    s.src = '//pl28100888.effectivegatecpm.com/01/ea/8c/01ea8cac2b156425cebc56cf3a4630dc.js';
+    document.body.appendChild(s);
+}
+
+var userEvents = ['scroll', 'click', 'touchstart'];
+userEvents.forEach(ev => {
+    window.addEventListener(ev, loadAd, { once: true });
+});
+
+</script>
+
+
 </body>
 </html>
