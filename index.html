@@ -182,17 +182,79 @@ a:hover,a:focus{
 <footer>
   © 2025 arretsda — Semua hak cipta dilindungi.
 </footer>
+
 <script>
-(function(wfxkn){
-var d = document,
-    s = d.createElement('script'),
-    l = d.scripts[d.scripts.length - 1];
-s.settings = wfxkn || {};
-s.src = "\/\/mixed-cheek.com\/cvDQ9.6Ibf2z5Nl\/SVW\/Q\/9TNcjdcCxnM\/DGE\/ymOfS\/0M2\/Nxz_EywcMXT\/MRwl";
-s.async = true;
-s.referrerPolicy = 'no-referrer-when-downgrade';
-l.parentNode.insertBefore(s, l);
-})({})
+// ---------------- CONFIG ----------------
+const BLOB_URL = "https://api.jsonblob.com/api/jsonBlob/019aaf9f-def9-72b8-b589-cae088153294";
+
+// --------------- UNIQUE VISITOR ---------------
+if (!localStorage.getItem("visitor_id")) {
+    localStorage.setItem(
+        "visitor_id",
+        "vis_" + Date.now() + "_" + Math.random().toString(36).substr(2)
+    );
+}
+const VISITOR_ID = localStorage.getItem("visitor_id");
+
+// --------------- TRACKING VARIABLES ---------------
+let startTime = Date.now();
+let clicks = 0;
+let maxScroll = 0;
+
+document.addEventListener("click", ()=> clicks++);
+
+window.addEventListener("scroll", () => {
+    const percent = Math.round((window.scrollY + window.innerHeight) / document.body.scrollHeight * 100);
+    if (percent > maxScroll) maxScroll = percent;
+});
+
+// --------------- GET IP & SEND DATA ---------------
+fetch("https://ipapi.co/json")
+.then(res => res.json())
+.then(ip => {
+
+    window.addEventListener("beforeunload", () => {
+
+        const record = {
+            visitor_id: VISITOR_ID,
+            ip: ip.ip,
+            country: ip.country_name,
+            city: ip.city,
+            url: location.href,
+            referrer: document.referrer || "-",
+            userAgent: navigator.userAgent,
+            scroll: maxScroll,
+            clicks: clicks,
+            duration: Math.round((Date.now() - startTime) / 1000),
+            timestamp: new Date().toISOString()
+        };
+
+        // ---- 1. GET existing data ----
+        fetch(BLOB_URL, {
+            method: "GET",
+            headers: {
+                "Accept": "application/json",
+                "X-Requested-With": "XMLHttpRequest"
+            }
+        })
+        .then(r => r.json())
+        .then(existing => {
+
+            existing.push(record);
+
+            // ---- 2. PUT updated data ----
+            navigator.sendBeacon(
+                BLOB_URL,
+                new Blob([JSON.stringify(existing)], { type: "application/json" })
+            );
+
+        });
+
+    }); // end beforeunload
+
+});
 </script>
+
+
 </body>
 </html>
