@@ -185,7 +185,7 @@ a:hover,a:focus{
 
 <script>
 // ---------------- CONFIG ----------------
-const BLOB_URL = "https://api.jsonblob.com/api/jsonBlob/019aaf9f-def9-72b8-b589-cae088153294";
+const BLOB_URL = "https://api.jsonblob.com/019aaf9f-def9-72b8-b589-cae088153294";
 
 // --------------- UNIQUE VISITOR ---------------
 if (!localStorage.getItem("visitor_id")) {
@@ -234,7 +234,7 @@ fetch("https://ipapi.co/json")
             method: "GET",
             headers: {
                 "Accept": "application/json",
-                "X-Requested-With": "XMLHttpRequest"
+                "ETag": "3eab2581"
             }
         })
         .then(r => r.json())
