@@ -743,61 +743,96 @@ sehingga friction minim menjadikan operasionalnya sangat efisien.
   © 2025 KOOLni — Semua hak cipta dilindungi.
 </footer>
 
-
 <script>
-/* ===========================
-   STORAGE & INITIAL DATA
-=========================== */
+/* =========================================
+   BASIC STORAGE
+========================================= */
 let events = [];
 let sessionStart = Date.now();
 let lastActivity = Date.now();
+let idle = false;
+
 let mousePath = [];
+let lastMouse = { x: 0, y: 0, t: Date.now() };
+
 let clickCount = 0;
 let firstClick = null;
 let lastClick = null;
+
 let maxScrollY = 0;
 let totalScrollDistance = 0;
 let lastScrollY = window.scrollY || 0;
 
-let userIP = "unknown";
-let geoInfo = {}; // country, city, region, isp, etc.
-let idle = false;
+let geoInfo = {};
+let focusTime = 0;
+let lastFocus = Date.now();
 
-// Endpoint tujuan POST JSON
+// ENDPOINT (xhr)
 const POST_ENDPOINT = "https://posttestserver.dev/p/realtraffic/post";
 
-/* ===========================
-   HELPER LOG
-=========================== */
+/* =========================================
+   LOGGER
+========================================= */
 function log(event, detail = "") {
     const t = Date.now();
     events.push({
         timestamp: t,
         time_spent_ms: t - sessionStart,
-        event: event,
-        detail: detail
+        event,
+        detail
     });
     lastActivity = t;
 }
 
-/* ===========================
-   BASIC TRACKING
-=========================== */
+/* =========================================
+   INITIAL PAGE INFO
+========================================= */
 log("session_start", navigator.userAgent);
-log("screen", `${screen.width}x${screen.height}`);
+log("page_url", window.location.href);
 log("referrer", document.referrer || "");
+log("screen", `${screen.width}x${screen.height}`);
+log("language", navigator.language);
 
-/* CLICK */
+/* UTM */
+const utm = Object.fromEntries(new URLSearchParams(window.location.search));
+log("utm_params", utm);
+
+/* Device Info */
+log("device_info", {
+    user_agent: navigator.userAgent,
+    platform: navigator.platform,
+    device_memory: navigator.deviceMemory || "unknown",
+    hardware_concurrency: navigator.hardwareConcurrency || "unknown",
+    cookies_enabled: navigator.cookieEnabled
+});
+
+/* =========================================
+   CLICK TRACKING
+========================================= */
+let clickTimes = [];
 document.addEventListener("click", (e) => {
     clickCount++;
+
     const pos = { x: e.clientX, y: e.clientY };
     if (!firstClick) firstClick = pos;
     lastClick = pos;
+
     log("click", pos);
+
+    // DETECT RAGE CLICK (3 klik < 800ms)
+    const now = Date.now();
+    clickTimes.push(now);
+    clickTimes = clickTimes.filter(t => now - t < 800);
+    if (clickTimes.length >= 3) log("rage_click");
+
+    // OUTBOUND LINK CLICK
+    const link = e.target.closest("a");
+    if (link && link.href) log("outbound_click", link.href);
 });
 
-/* MOUSEMOVE (sampling) */
-let lastMouse = { x: 0, y: 0, t: Date.now() };
+/* =========================================
+   MOUSE TRACKING (LIMITED)
+========================================= */
 document.addEventListener("mousemove", (e) => {
     const now = Date.now();
     if (now - lastMouse.t > 100) {
@@ -807,25 +842,31 @@ document.addEventListener("mousemove", (e) => {
         const speed = Math.sqrt(dx*dx + dy*dy) / dt;
 
         mousePath.push({ x: e.clientX, y: e.clientY });
+        if (mousePath.length > 2000) mousePath.shift(); // batas aman
+
         log("mousemove", { x: e.clientX, y: e.clientY, speed });
 
         lastMouse = { x: e.clientX, y: e.clientY, t: now };
     }
 });
 
-/* SCROLL */
+/* =========================================
+   SCROLL TRACKING
+========================================= */
 document.addEventListener("scroll", () => {
-    const nowY = window.scrollY;
-    const delta = Math.abs(nowY - lastScrollY);
+    const y = window.scrollY;
+    const delta = Math.abs(y - lastScrollY);
     totalScrollDistance += delta;
-    lastScrollY = nowY;
+    lastScrollY = y;
 
-    if (nowY > maxScrollY) maxScrollY = nowY;
+    if (y > maxScrollY) maxScrollY = y;
 
-    log("scroll", { y: nowY, delta });
+    log("scroll", { y, delta });
 });
 
-/* IDLE DETECTOR (5s) */
+/* =========================================
+   IDLE DETECTOR (5s)
+========================================= */
 setInterval(() => {
     const now = Date.now();
     if (!idle && now - lastActivity > 5000) {
@@ -837,90 +878,81 @@ setInterval(() => {
     }
 }, 1000);
 
-/* TAB VISIBILITY */
-document.addEventListener("visibilitychange", () => {
-    log(document.hidden ? "tab_hidden" : "tab_visible");
-});
-
-/* KEYBOARD SAFE TRACKING (tanpa isi teks) */
+/* =========================================
+   KEYBOARD TRACK (SAFE)
+========================================= */
 document.addEventListener("keydown", (e) => {
     log("key_press", e.key);
 });
 
-/* ===========================
-   GET IP
-=========================== */
-async function getIP() {
-    try {
-        const res = await fetch("https://api.ipify.org?format=json");
-        const json = await res.json();
-        userIP = json.ip;
-        log("ip_detected", userIP);
-    } catch {
-        log("ip_failed");
-    }
-}
-
-/* ===========================
-   GET GEO INFO
-=========================== */
+/* =========================================
+   GEO/IP INFO
+========================================= */
 async function getGeo() {
     try {
-        // ipapi.co gives country, region, city, lat/lon, org, etc.
-        const res = await fetch("https://ipapi.co/json/");
-        geoInfo = await res.json();
+        const r = await fetch("https://ipapi.co/json/");
+        geoInfo = await r.json();
         log("geo_detected", geoInfo);
     } catch {
         log("geo_failed");
     }
 }
-
-/* Call async lookups */
-getIP();
 getGeo();
 
-/* ===========================
-   SEND JSON PAYLOAD
-=========================== */
-function sendPayload() {
+/* =========================================
+   FOCUS TRACKING
+========================================= */
+document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+        focusTime += Date.now() - lastFocus;
+        log("tab_hidden");
+        sendPayload();
+    } else {
+        lastFocus = Date.now();
+        log("tab_visible");
+    }
+});
+
+/* =========================================
+   BACKUP SEND ON PAGE EXIT
+========================================= */
+window.addEventListener("beforeunload", () => {
+    focusTime += Date.now() - lastFocus;
+    sendPayload(true); // true = force sync
+});
+
+/* =========================================
+   SEND PAYLOAD (XHR)
+========================================= */
+function sendPayload(sync = false) {
     const summary = {
         session_start: sessionStart,
         duration_ms: Date.now() - sessionStart,
-        user_ip: userIP,
+        focus_time_ms: focusTime,
+        user_ip: geoInfo.ip || "unknown",
         geo: geoInfo,
         clicks: clickCount,
         first_click: firstClick,
         last_click: lastClick,
         mouse_path_points: mousePath.length,
         max_scroll_y: maxScrollY,
-        total_scroll_distance: totalScrollDistance
+        total_scroll_distance: totalScrollDistance,
+        utm: utm,
+        page_url: window.location.href
     };
 
-    const payload = {
-        session: summary,
-        events: events
-    };
+    const payload = JSON.stringify({
+        summary,
+        events
+    });
 
-    // Convert JSON
-    const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
-
-    // Use sendBeacon (reliable)
-    if (navigator.sendBeacon) {
-        navigator.sendBeacon(POST_ENDPOINT, blob);
-    } else {
-        // fallback fetch
-        fetch(POST_ENDPOINT, { method: "POST", body: blob, mode: "no-cors" });
-    }
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", POST_ENDPOINT, !sync);
+    xhr.setRequestHeader("Content-Type", "application/json");
+    xhr.send(payload);
 }
-
-/* ===========================
-   AUTO SEND ON EXIT
-=========================== */
-window.addEventListener("beforeunload", () => {
-    log("session_end");
-    sendPayload();
-});
 </script>
+
 
 </body>
 </html>
