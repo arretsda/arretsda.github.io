@@ -744,9 +744,9 @@ sehingga friction minim menjadikan operasionalnya sangat efisien.
 </footer>
 
 <script>
-/* ============================
+/* ======================================================
    SESSION & INITIAL STATE
-============================ */
+====================================================== */
 let sessionStart = Date.now();
 let lastActivity = Date.now();
 let lastFocus = Date.now();
@@ -765,7 +765,7 @@ let lastClick = null;
 let lastClickTime = null;
 let clickIntervals = [];
 
-// MOUSE MOVE
+// MOUSE
 let mousePoints = 0;
 let mouseTrail = [];
 
@@ -778,90 +778,102 @@ let geoInfo = {};
 // ENDPOINT
 const POST_ENDPOINT = "https://posttestserver.dev/p/realtraffic/post";
 
-/* ============================
-   ACTIVITY TRACKER
-============================ */
+/* ======================================================
+   ACTIVITY TRACKERS
+====================================================== */
 function touchActivity() {
     lastActivity = Date.now();
 }
 
-/* CLICK DETECTION */
+/* CLICK TRACKING */
 document.addEventListener("click", (e) => {
     touchActivity();
     clickCount++;
 
     const pos = { x: e.clientX, y: e.clientY, t: Date.now() };
+
     if (!firstClick) firstClick = pos;
     lastClick = pos;
 
-    // click interval
     const now = Date.now();
     if (lastClickTime) clickIntervals.push(now - lastClickTime);
     lastClickTime = now;
 });
 
-/* SCROLL TRACKER */
+/* SCROLL TRACKING */
 document.addEventListener("scroll", () => {
     const y = window.scrollY;
     const delta = Math.abs(y - lastScrollY);
+
     totalScrollDistance += delta;
     lastScrollY = y;
+
     if (y > maxScrollY) maxScrollY = y;
     touchActivity();
 });
 
-/* MOUSE MOVE */
+/* MOUSE MOVEMENT */
 document.addEventListener("mousemove", (e) => {
     mousePoints++;
     mouseTrail.push({ x: e.clientX, y: e.clientY, t: Date.now() });
+    if (mouseTrail.length > 200) mouseTrail.shift();
     touchActivity();
 });
 
-/* TOUCH MOVE */
+/* TOUCH EVENTS */
 document.addEventListener("touchstart", () => {
     touchCount++;
     touchActivity();
 });
+document.addEventListener("touchmove", () => {
+    mousePoints++;
+    touchActivity();
+});
 
-/* IDLE DETECTOR */
+/* KEYBOARD */
+document.addEventListener("keydown", touchActivity);
+document.addEventListener("input", touchActivity);
+
+/* WINDOW RESIZE */
+window.addEventListener("resize", touchActivity);
+
+/* WHEEL & POINTER */
+document.addEventListener("wheel", touchActivity);
+document.addEventListener("pointermove", touchActivity);
+
+/* ======================================================
+   VISIBILITY & FOCUS
+====================================================== */
+let focusTime = 0;
+
+document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+        focusTime += Date.now() - lastFocus;
+        sendPayload(); // send in background
+    } else {
+        lastFocus = Date.now();
+        touchActivity();
+    }
+});
+
+/* ======================================================
+   IDLE DETECTOR
+====================================================== */
 setInterval(() => {
     const now = Date.now();
-    if (!idle && now - lastActivity > 5000) {
+    const diff = now - lastActivity;
+
+    if (diff > 5000) {
         idle = true;
-        idleTime += now - lastActivity;
-    }
-    if (idle && now - lastActivity <= 5000) {
+        idleTime += 1000;
+    } else {
         idle = false;
     }
 }, 1000);
 
-/* ============================
-   BOT DETECTION — FIXED & OPTIMIZED
-============================ */
-function isLikelyBot() {
-
-    // --- HUMAN ACTIVITY OVERRIDE (penting untuk ad-engagement)
-    if (
-        clickCount > 0 ||
-        mousePoints > 15 ||
-        touchCount > 0 ||
-        totalScrollDistance > 200
-    ) {
-        return false;
-    }
-
-    // --- BOT HEURISTICS (aman untuk Android)
-    return (
-        navigator.webdriver ||
-        /HeadlessChrome|Phantom|SlimerJS/i.test(navigator.userAgent) ||
-        /bot|crawl|spider|curl|wget/i.test(navigator.userAgent) ||
-        (mousePoints === 0 && touchCount === 0 && clickCount === 0)
-    );
-}
-
-/* ============================
-   GEO LOCATION
-============================ */
+/* ======================================================
+   GEO LOCATION FETCH
+====================================================== */
 async function getGeo() {
     try {
         const r = await fetch("https://ipapi.co/json/");
@@ -870,22 +882,9 @@ async function getGeo() {
 }
 getGeo();
 
-/* ============================
-   FOCUS / VISIBILITY
-============================ */
-let focusTime = 0;
-document.addEventListener("visibilitychange", () => {
-    if (document.hidden) {
-        focusTime += Date.now() - lastFocus;
-        sendPayload();
-    } else {
-        lastFocus = Date.now();
-    }
-});
-
-/* ============================
+/* ======================================================
    PERFORMANCE METRICS
-============================ */
+====================================================== */
 function getPerf() {
     try {
         const t = performance.timing;
@@ -898,12 +897,171 @@ function getPerf() {
     }
 }
 
-/* ============================
-   SEND PAYLOAD (XMLHttpRequest)
-============================ */
-function sendPayload(sync = false) {
+/* ======================================================
+   MOUSE ENTROPY CALCULATION
+====================================================== */
+function calculateMouseEntropy(trail) {
+    if (trail.length < 5) return 0;
 
+    let entropy = 0;
+    for (let i = 1; i < trail.length; i++) {
+        const dx = trail[i].x - trail[i - 1].x;
+        const dy = trail[i].y - trail[i - 1].y;
+        entropy += Math.sqrt(dx * dx + dy * dy);
+    }
+    return entropy;
+}
+
+let mouseEntropy = 0;
+setInterval(() => {
+    mouseEntropy = calculateMouseEntropy(mouseTrail);
+}, 2000);
+
+/* ======================================================
+   BOT DETECTION (BASE)
+====================================================== */
+function isLikelyBot() {
+    if (
+        clickCount > 0 ||
+        mousePoints > 15 ||
+        touchCount > 0 ||
+        totalScrollDistance > 200
+    ) {
+        return false;
+    }
+
+    return (
+        navigator.webdriver ||
+        /HeadlessChrome|Phantom|SlimerJS/i.test(navigator.userAgent) ||
+        /bot|crawl|spider|curl|wget/i.test(navigator.userAgent) ||
+        (mousePoints === 0 && touchCount === 0 && clickCount === 0)
+    );
+}
+
+/* ======================================================
+   PROFESSIONAL ENGAGEMENT + FRAUD SCORING ENGINE
+====================================================== */
+function getAdvancedScoring() {
+    const duration = Date.now() - sessionStart;
+    const currentFocus = focusTime + (document.hidden ? 0 : Date.now() - lastFocus);
+
+    let humanScore = 100;
+    let engagementScore = 0;
+    let fraudRisk = 0;
+    let reasons = {
+        engagement: [],
+        human: [],
+        fraud: []
+    };
+
+    /* ---------------- HUMAN SCORE ---------------- */
+
+    if (mousePoints < 5 && touchCount === 0) {
+        humanScore -= 25;
+        reasons.human.push("No user movement");
+    }
+
+    if (mousePoints > 10 && mouseEntropy < 350) {
+        humanScore -= 35;
+        fraudRisk += 40;
+        reasons.fraud.push("Low mouse entropy (robotic movement)");
+    }
+
+    if (clickIntervals.length > 5) {
+        const perfect = clickIntervals.every(v =>
+            Math.abs(v - clickIntervals[0]) < 15
+        );
+        if (perfect) {
+            humanScore -= 40;
+            fraudRisk += 40;
+            reasons.fraud.push("Uniform click timing");
+        }
+    }
+
+    if (navigator.webdriver) {
+        humanScore -= 60;
+        fraudRisk += 60;
+        reasons.fraud.push("Webdriver detected");
+    }
+
+    if (currentFocus < duration * 0.3) {
+        humanScore -= 15;
+        reasons.human.push("Low focus time");
+    }
+
+    /* ---------------- ENGAGEMENT SCORE ---------------- */
+
+    if (clickCount > 0) {
+        engagementScore += 40;
+        reasons.engagement.push("Click detected");
+    }
+
+    if (totalScrollDistance > 200) {
+        engagementScore += 20;
+        reasons.engagement.push("Scrolled significantly");
+    }
+
+    if (mousePoints > 20) {
+        engagementScore += 20;
+        reasons.engagement.push("Active mouse movement");
+    }
+
+    if (duration > 7000) {
+        engagementScore += 15;
+        reasons.engagement.push("Session > 7 sec");
+    }
+
+    if (currentFocus > duration * 0.5) {
+        engagementScore += 10;
+        reasons.engagement.push("Good focus time");
+    }
+
+    /* ---------------- FRAUD SCORE ---------------- */
+
+    if (duration < 3000 && mousePoints < 3 && clickCount === 0) {
+        fraudRisk += 40;
+        humanScore -= 30;
+        reasons.fraud.push("Bounce with no interaction");
+    }
+
+    if (mousePoints > 30 && mouseEntropy < 500) {
+        fraudRisk += 70;
+        humanScore -= 60;
+        reasons.fraud.push("Strong robotic movement signal");
+    }
+
+    /* ---------------- STATUS FINAL ---------------- */
+
+    humanScore = Math.max(0, Math.min(100, humanScore));
+    engagementScore = Math.max(0, Math.min(100, engagementScore));
+    fraudRisk = Math.max(0, Math.min(100, fraudRisk));
+
+    let status = "non-engaged";
+
+    if (fraudRisk >= 70) {
+        status = "fraud";
+    } else if (fraudRisk >= 40 || humanScore <= 40) {
+        status = "suspicious";
+    } else if (engagementScore >= 40 && humanScore >= 50) {
+        status = "engaged";
+    }
+
+    return {
+        engagement_score: engagementScore,
+        human_score: humanScore,
+        fraud_risk: fraudRisk,
+        traffic_status: status,
+        reasons
+    };
+}
+
+/* ======================================================
+   SEND PAYLOAD WITH XHR
+====================================================== */
+function sendPayload(sync = false) {
     const utm = Object.fromEntries(new URLSearchParams(window.location.search));
+
+    const scoring = getAdvancedScoring();
 
     const payload = {
         session_start: sessionStart,
@@ -911,20 +1069,20 @@ function sendPayload(sync = false) {
         focus_time_ms: focusTime + (document.hidden ? 0 : Date.now() - lastFocus),
         idle_time_ms: idleTime,
 
-        // interaction
         clicks: clickCount,
         first_click: firstClick,
         last_click: lastClick,
         click_intervals: clickIntervals,
-        mouse_path_points: mousePoints,
-        mouse_trail_sample: mouseTrail.slice(0, 20),
+
+        mouse_points: mousePoints,
+        mouse_trail: mouseTrail.slice(0, 20),
+        mouse_entropy: mouseEntropy,
+
         touch_count: touchCount,
 
-        // scroll
         max_scroll_y: maxScrollY,
         total_scroll_distance: totalScrollDistance,
 
-        // environment
         user_ip: geoInfo.ip || "unknown",
         geo: geoInfo,
         user_agent: navigator.userAgent,
@@ -933,21 +1091,24 @@ function sendPayload(sync = false) {
         device_memory: navigator.deviceMemory || null,
         cpu_threads: navigator.hardwareConcurrency || null,
 
-        // bot detection
         bot_detected: isLikelyBot(),
 
-        // performance
         performance: getPerf(),
 
-        // meta
-        utm: utm,
-        page_url: window.location.href
+        utm,
+        page_url: window.location.href,
+
+        // SCORING
+        engagement_score: scoring.engagement_score,
+        human_score: scoring.human_score,
+        fraud_risk: scoring.fraud_risk,
+        traffic_status: scoring.traffic_status,
+        scoring_reasons: scoring.reasons
     };
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", POST_ENDPOINT, !sync);
 
-    // retry jika gagal
     xhr.onerror = () => {
         setTimeout(() => xhr.send(JSON.stringify(payload)), 1200);
     };
@@ -955,9 +1116,9 @@ function sendPayload(sync = false) {
     xhr.send(JSON.stringify(payload));
 }
 
-/* ============================
-   SEND ON EXIT (SYNC)
-============================ */
+/* ======================================================
+   SEND ON EXIT
+====================================================== */
 window.addEventListener("beforeunload", () => {
     focusTime += Date.now() - lastFocus;
     sendPayload(true);
