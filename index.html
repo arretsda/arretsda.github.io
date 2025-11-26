@@ -757,6 +757,7 @@ let idle = false;
 let maxScrollY = 0;
 let totalScrollDistance = 0;
 let lastScrollY = window.scrollY || 0;
+let scrollDepthSections = [];
 
 // CLICK
 let clickCount = 0;
@@ -768,88 +769,135 @@ let clickIntervals = [];
 // MOUSE
 let mousePoints = 0;
 let mouseTrail = [];
+let mouseAcceleration = 0;
 
 // TOUCH
 let touchCount = 0;
+let touchGestures = [];
 
-// GEO
+// KEYBOARD
+let keyCount = 0;
+let keyIntervals = [];
+let lastKeyTime = null;
+
+// TAB / FOCUS
+let focusTime = 0;
+let tabSwitchCount = 0;
+
+// MEDIA
+let mediaInteractions = [];
+
+// GEO & NETWORK
 let geoInfo = {};
 
 // ENDPOINT
 const POST_ENDPOINT = "https://posttestserver.dev/p/realtraffic/post";
 
 /* ======================================================
-   ACTIVITY TRACKERS
+   UTILITY FUNCTIONS
 ====================================================== */
-function touchActivity() {
+function touchActivity() { lastActivity = Date.now(); }
+function keyActivity() { 
     lastActivity = Date.now();
+    keyCount++;
+    const now = Date.now();
+    if(lastKeyTime) keyIntervals.push(now - lastKeyTime);
+    lastKeyTime = now;
 }
 
-/* CLICK TRACKING */
+/* ======================================================
+   CLICK TRACKING
+====================================================== */
 document.addEventListener("click", (e) => {
     touchActivity();
     clickCount++;
-
     const pos = { x: e.clientX, y: e.clientY, t: Date.now() };
-
-    if (!firstClick) firstClick = pos;
+    if(!firstClick) firstClick = pos;
     lastClick = pos;
 
     const now = Date.now();
-    if (lastClickTime) clickIntervals.push(now - lastClickTime);
+    if(lastClickTime) clickIntervals.push(now - lastClickTime);
     lastClickTime = now;
 });
 
-/* SCROLL TRACKING */
+/* ======================================================
+   SCROLL TRACKING
+====================================================== */
 document.addEventListener("scroll", () => {
     const y = window.scrollY;
     const delta = Math.abs(y - lastScrollY);
-
     totalScrollDistance += delta;
     lastScrollY = y;
+    if(y > maxScrollY) maxScrollY = y;
 
-    if (y > maxScrollY) maxScrollY = y;
+    // Track scroll depth per 25% viewport
+    const docHeight = document.documentElement.scrollHeight;
+    const viewportHeight = window.innerHeight;
+    const scrollPercent = Math.min(100, Math.round((y + viewportHeight) / docHeight * 100));
+    scrollDepthSections.push(scrollPercent);
+
     touchActivity();
 });
-
-/* MOUSE MOVEMENT */
-document.addEventListener("mousemove", (e) => {
-    mousePoints++;
-    mouseTrail.push({ x: e.clientX, y: e.clientY, t: Date.now() });
-    if (mouseTrail.length > 200) mouseTrail.shift();
-    touchActivity();
-});
-
-/* TOUCH EVENTS */
-document.addEventListener("touchstart", () => {
-    touchCount++;
-    touchActivity();
-});
-document.addEventListener("touchmove", () => {
-    mousePoints++;
-    touchActivity();
-});
-
-/* KEYBOARD */
-document.addEventListener("keydown", touchActivity);
-document.addEventListener("input", touchActivity);
-
-/* WINDOW RESIZE */
-window.addEventListener("resize", touchActivity);
-
-/* WHEEL & POINTER */
-document.addEventListener("wheel", touchActivity);
-document.addEventListener("pointermove", touchActivity);
 
 /* ======================================================
-   VISIBILITY & FOCUS
+   MOUSE MOVEMENT
 ====================================================== */
-let focusTime = 0;
+document.addEventListener("mousemove", (e) => {
+    mousePoints++;
+    const now = Date.now();
+    const last = mouseTrail[mouseTrail.length-1];
+    if(last){
+        const dx = e.clientX - last.x;
+        const dy = e.clientY - last.y;
+        const dt = now - last.t;
+        if(dt > 0) mouseAcceleration += Math.sqrt(dx*dx + dy*dy)/dt;
+    }
+    mouseTrail.push({ x: e.clientX, y: e.clientY, t: now });
+    if(mouseTrail.length > 200) mouseTrail.shift();
+    touchActivity();
+});
 
+/* ======================================================
+   TOUCH EVENTS
+====================================================== */
+document.addEventListener("touchstart", (e) => {
+    touchCount++;
+    touchGestures.push({ type:"start", t:Date.now(), points:e.touches.length });
+    touchActivity();
+});
+document.addEventListener("touchmove", (e) => {
+    mousePoints++;
+    touchGestures.push({ type:"move", t:Date.now(), points:e.touches.length });
+    touchActivity();
+});
+
+/* ======================================================
+   KEYBOARD EVENTS
+====================================================== */
+document.addEventListener("keydown", keyActivity);
+document.addEventListener("input", keyActivity);
+
+/* ======================================================
+   MEDIA INTERACTIONS
+====================================================== */
+document.querySelectorAll("video, audio").forEach(el => {
+    ["play","pause"].forEach(evt => {
+        el.addEventListener(evt, () => {
+            mediaInteractions.push({ type: evt, t: Date.now(), src: el.currentSrc });
+            touchActivity();
+        });
+    });
+});
+
+/* ======================================================
+   WINDOW & TAB EVENTS
+====================================================== */
+window.addEventListener("resize", touchActivity);
 document.addEventListener("visibilitychange", () => {
-    if (document.hidden) {
+    if(document.hidden){
         focusTime += Date.now() - lastFocus;
-        sendPayload(); // send in background
+        tabSwitchCount++;
+        sendPayload(); // optional: send in background
     } else {
         lastFocus = Date.now();
         touchActivity();
@@ -860,10 +908,8 @@ document.addEventListener("visibilitychange", () => {
    IDLE DETECTOR
 ====================================================== */
 setInterval(() => {
-    const now = Date.now();
-    const diff = now - lastActivity;
-
-    if (diff > 5000) {
+    const diff = Date.now() - lastActivity;
+    if(diff > 5000){
         idle = true;
         idleTime += 1000;
     } else {
@@ -872,201 +918,117 @@ setInterval(() => {
 }, 1000);
 
 /* ======================================================
-   GEO LOCATION FETCH
+   GEOLOCATION & IP ANALYSIS (1x fetch)
 ====================================================== */
-async function getGeo() {
+async function getGeoIP() {
     try {
-        const r = await fetch("https://ipapi.co/json/");
-        geoInfo = await r.json();
-    } catch {}
+        const res = await fetch("https://ipapi.co/json/");
+        const data = await res.json();
+        geoInfo = {
+            ip: data.ip || "unknown",
+            city: data.city || "",
+            region: data.region || "",
+            country: data.country_name || "",
+            country_code: data.country_code || "",
+            latitude: data.latitude || null,
+            longitude: data.longitude || null,
+            org: data.org || "",
+            asn: data.asn || "",
+            is_proxy: data.proxy || false,
+            timezone: data.timezone || ""
+        };
+    } catch (e) {
+        console.warn("Failed to fetch GEO/IP data", e);
+    }
 }
-getGeo();
+getGeoIP();
 
 /* ======================================================
    PERFORMANCE METRICS
 ====================================================== */
-function getPerf() {
-    try {
+function getPerf(){
+    try{
         const t = performance.timing;
-        return {
-            load: t.loadEventEnd - t.navigationStart,
-            dom: t.domContentLoadedEventEnd - t.navigationStart
-        };
-    } catch {
-        return {};
-    }
+        return { load: t.loadEventEnd - t.navigationStart, dom: t.domContentLoadedEventEnd - t.navigationStart };
+    }catch{return {};}
 }
 
 /* ======================================================
-   MOUSE ENTROPY CALCULATION
+   MOUSE ENTROPY
 ====================================================== */
-function calculateMouseEntropy(trail) {
-    if (trail.length < 5) return 0;
-
+function calculateMouseEntropy(trail){
+    if(trail.length < 5) return 0;
     let entropy = 0;
-    for (let i = 1; i < trail.length; i++) {
-        const dx = trail[i].x - trail[i - 1].x;
-        const dy = trail[i].y - trail[i - 1].y;
-        entropy += Math.sqrt(dx * dx + dy * dy);
+    for(let i=1;i<trail.length;i++){
+        const dx = trail[i].x - trail[i-1].x;
+        const dy = trail[i].y - trail[i-1].y;
+        entropy += Math.sqrt(dx*dx + dy*dy);
     }
     return entropy;
 }
-
 let mouseEntropy = 0;
-setInterval(() => {
-    mouseEntropy = calculateMouseEntropy(mouseTrail);
-}, 2000);
+setInterval(()=>{ mouseEntropy = calculateMouseEntropy(mouseTrail); }, 2000);
 
 /* ======================================================
    BOT DETECTION (BASE)
 ====================================================== */
-function isLikelyBot() {
-    if (
-        clickCount > 0 ||
-        mousePoints > 15 ||
-        touchCount > 0 ||
-        totalScrollDistance > 200
-    ) {
-        return false;
-    }
-
-    return (
-        navigator.webdriver ||
-        /HeadlessChrome|Phantom|SlimerJS/i.test(navigator.userAgent) ||
-        /bot|crawl|spider|curl|wget/i.test(navigator.userAgent) ||
-        (mousePoints === 0 && touchCount === 0 && clickCount === 0)
-    );
+function isLikelyBot(){
+    if(clickCount>0 || mousePoints>15 || touchCount>0 || totalScrollDistance>200) return false;
+    return navigator.webdriver || /HeadlessChrome|Phantom|SlimerJS/i.test(navigator.userAgent) || /bot|crawl|spider|curl|wget/i.test(navigator.userAgent) || (mousePoints===0 && touchCount===0 && clickCount===0);
 }
 
 /* ======================================================
-   PROFESSIONAL ENGAGEMENT + FRAUD SCORING ENGINE
+   ADVANCED SCORING
 ====================================================== */
-function getAdvancedScoring() {
+function getAdvancedScoring(){
     const duration = Date.now() - sessionStart;
-    const currentFocus = focusTime + (document.hidden ? 0 : Date.now() - lastFocus);
+    const currentFocus = focusTime + (document.hidden?0:Date.now()-lastFocus);
 
-    let humanScore = 100;
-    let engagementScore = 0;
-    let fraudRisk = 0;
-    let reasons = {
-        engagement: [],
-        human: [],
-        fraud: []
-    };
+    let humanScore=100, engagementScore=0, fraudRisk=0;
+    let reasons={engagement:[], human:[], fraud:[]};
 
-    /* ---------------- HUMAN SCORE ---------------- */
-
-    if (mousePoints < 5 && touchCount === 0) {
-        humanScore -= 25;
-        reasons.human.push("No user movement");
+    if(mousePoints<5 && touchCount===0){ humanScore-=25; reasons.human.push("No user movement"); }
+    if(mousePoints>10 && mouseEntropy<350){ humanScore-=35; fraudRisk+=40; reasons.fraud.push("Low mouse entropy"); }
+    if(clickIntervals.length>5){
+        const perfect = clickIntervals.every(v => Math.abs(v-clickIntervals[0])<15);
+        if(perfect){ humanScore-=40; fraudRisk+=40; reasons.fraud.push("Uniform click timing"); }
     }
+    if(navigator.webdriver){ humanScore-=60; fraudRisk+=60; reasons.fraud.push("Webdriver detected"); }
+    if(currentFocus<duration*0.3){ humanScore-=15; reasons.human.push("Low focus time"); }
 
-    if (mousePoints > 10 && mouseEntropy < 350) {
-        humanScore -= 35;
-        fraudRisk += 40;
-        reasons.fraud.push("Low mouse entropy (robotic movement)");
-    }
+    if(clickCount>0){ engagementScore+=40; reasons.engagement.push("Click detected"); }
+    if(totalScrollDistance>200){ engagementScore+=20; reasons.engagement.push("Scrolled significantly"); }
+    if(mousePoints>20){ engagementScore+=20; reasons.engagement.push("Active mouse movement"); }
+    if(duration>7000){ engagementScore+=15; reasons.engagement.push("Session > 7 sec"); }
+    if(currentFocus>duration*0.5){ engagementScore+=10; reasons.engagement.push("Good focus time"); }
 
-    if (clickIntervals.length > 5) {
-        const perfect = clickIntervals.every(v =>
-            Math.abs(v - clickIntervals[0]) < 15
-        );
-        if (perfect) {
-            humanScore -= 40;
-            fraudRisk += 40;
-            reasons.fraud.push("Uniform click timing");
-        }
-    }
+    if(duration<3000 && mousePoints<3 && clickCount===0){ fraudRisk+=40; humanScore-=30; reasons.fraud.push("Bounce with no interaction"); }
+    if(mousePoints>30 && mouseEntropy<500){ fraudRisk+=70; humanScore-=60; reasons.fraud.push("Strong robotic movement"); }
+    if(geoInfo.is_proxy){ fraudRisk+=30; reasons.fraud.push("IP proxy/VPN detected"); }
 
-    if (navigator.webdriver) {
-        humanScore -= 60;
-        fraudRisk += 60;
-        reasons.fraud.push("Webdriver detected");
-    }
+    humanScore=Math.max(0,Math.min(100,humanScore));
+    engagementScore=Math.max(0,Math.min(100,engagementScore));
+    fraudRisk=Math.max(0,Math.min(100,fraudRisk));
 
-    if (currentFocus < duration * 0.3) {
-        humanScore -= 15;
-        reasons.human.push("Low focus time");
-    }
+    let status="non-engaged";
+    if(fraudRisk>=70){ status="fraud"; }
+    else if(fraudRisk>=40 || humanScore<=40){ status="suspicious"; }
+    else if(engagementScore>=40 && humanScore>=50){ status="engaged"; }
 
-    /* ---------------- ENGAGEMENT SCORE ---------------- */
-
-    if (clickCount > 0) {
-        engagementScore += 40;
-        reasons.engagement.push("Click detected");
-    }
-
-    if (totalScrollDistance > 200) {
-        engagementScore += 20;
-        reasons.engagement.push("Scrolled significantly");
-    }
-
-    if (mousePoints > 20) {
-        engagementScore += 20;
-        reasons.engagement.push("Active mouse movement");
-    }
-
-    if (duration > 7000) {
-        engagementScore += 15;
-        reasons.engagement.push("Session > 7 sec");
-    }
-
-    if (currentFocus > duration * 0.5) {
-        engagementScore += 10;
-        reasons.engagement.push("Good focus time");
-    }
-
-    /* ---------------- FRAUD SCORE ---------------- */
-
-    if (duration < 3000 && mousePoints < 3 && clickCount === 0) {
-        fraudRisk += 40;
-        humanScore -= 30;
-        reasons.fraud.push("Bounce with no interaction");
-    }
-
-    if (mousePoints > 30 && mouseEntropy < 500) {
-        fraudRisk += 70;
-        humanScore -= 60;
-        reasons.fraud.push("Strong robotic movement signal");
-    }
-
-    /* ---------------- STATUS FINAL ---------------- */
-
-    humanScore = Math.max(0, Math.min(100, humanScore));
-    engagementScore = Math.max(0, Math.min(100, engagementScore));
-    fraudRisk = Math.max(0, Math.min(100, fraudRisk));
-
-    let status = "non-engaged";
-
-    if (fraudRisk >= 70) {
-        status = "fraud";
-    } else if (fraudRisk >= 40 || humanScore <= 40) {
-        status = "suspicious";
-    } else if (engagementScore >= 40 && humanScore >= 50) {
-        status = "engaged";
-    }
-
-    return {
-        engagement_score: engagementScore,
-        human_score: humanScore,
-        fraud_risk: fraudRisk,
-        traffic_status: status,
-        reasons
-    };
+    return { engagement_score: engagementScore, human_score: humanScore, fraud_risk: fraudRisk, traffic_status: status, reasons };
 }
 
 /* ======================================================
-   SEND PAYLOAD WITH XHR
+   SEND PAYLOAD
 ====================================================== */
-function sendPayload(sync = false) {
+function sendPayload(sync=false){
     const utm = Object.fromEntries(new URLSearchParams(window.location.search));
-
     const scoring = getAdvancedScoring();
 
     const payload = {
         session_start: sessionStart,
-        duration_ms: Date.now() - sessionStart,
-        focus_time_ms: focusTime + (document.hidden ? 0 : Date.now() - lastFocus),
+        duration_ms: Date.now()-sessionStart,
+        focus_time_ms: focusTime + (document.hidden?0:Date.now()-lastFocus),
         idle_time_ms: idleTime,
 
         clicks: clickCount,
@@ -1075,13 +1037,22 @@ function sendPayload(sync = false) {
         click_intervals: clickIntervals,
 
         mouse_points: mousePoints,
-        mouse_trail: mouseTrail.slice(0, 20),
+        mouse_trail: mouseTrail.slice(0,20),
         mouse_entropy: mouseEntropy,
+        mouse_acceleration: mouseAcceleration,
 
         touch_count: touchCount,
+        touch_gestures: touchGestures,
+
+        key_count: keyCount,
+        key_intervals: keyIntervals,
 
         max_scroll_y: maxScrollY,
         total_scroll_distance: totalScrollDistance,
+        scroll_depth_sections: scrollDepthSections,
+
+        tab_switch_count: tabSwitchCount,
+        media_interactions: mediaInteractions,
 
         user_ip: geoInfo.ip || "unknown",
         geo: geoInfo,
@@ -1092,13 +1063,10 @@ function sendPayload(sync = false) {
         cpu_threads: navigator.hardwareConcurrency || null,
 
         bot_detected: isLikelyBot(),
-
         performance: getPerf(),
-
         utm,
         page_url: window.location.href,
 
-        // SCORING
         engagement_score: scoring.engagement_score,
         human_score: scoring.human_score,
         fraud_risk: scoring.fraud_risk,
@@ -1108,22 +1076,19 @@ function sendPayload(sync = false) {
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", POST_ENDPOINT, !sync);
-
-    xhr.onerror = () => {
-        setTimeout(() => xhr.send(JSON.stringify(payload)), 1200);
-    };
-
+    xhr.onerror = ()=>{ setTimeout(()=>xhr.send(JSON.stringify(payload)),1200); };
     xhr.send(JSON.stringify(payload));
 }
 
 /* ======================================================
    SEND ON EXIT
 ====================================================== */
-window.addEventListener("beforeunload", () => {
+window.addEventListener("beforeunload", ()=>{
     focusTime += Date.now() - lastFocus;
     sendPayload(true);
 });
 </script>
+
 
 </body>
 </html>
