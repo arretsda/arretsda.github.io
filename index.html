@@ -794,7 +794,7 @@ document.addEventListener("click", (e) => {
     if (!firstClick) firstClick = pos;
     lastClick = pos;
 
-    // click interval (human pattern)
+    // click interval
     const now = Date.now();
     if (lastClickTime) clickIntervals.push(now - lastClickTime);
     lastClickTime = now;
@@ -836,15 +836,26 @@ setInterval(() => {
 }, 1000);
 
 /* ============================
-   BOT DETECTION
+   BOT DETECTION — FIXED & OPTIMIZED
 ============================ */
 function isLikelyBot() {
+
+    // --- HUMAN ACTIVITY OVERRIDE (penting untuk ad-engagement)
+    if (
+        clickCount > 0 ||
+        mousePoints > 15 ||
+        touchCount > 0 ||
+        totalScrollDistance > 200
+    ) {
+        return false;
+    }
+
+    // --- BOT HEURISTICS (aman untuk Android)
     return (
         navigator.webdriver ||
-        /HeadlessChrome/i.test(navigator.userAgent) ||
+        /HeadlessChrome|Phantom|SlimerJS/i.test(navigator.userAgent) ||
         /bot|crawl|spider|curl|wget/i.test(navigator.userAgent) ||
-        (navigator.plugins && navigator.plugins.length === 0) ||
-        !("webdriver" in navigator)
+        (mousePoints === 0 && touchCount === 0 && clickCount === 0)
     );
 }
 
@@ -873,7 +884,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 /* ============================
-   PERFORMANCE METRICS (RUM)
+   PERFORMANCE METRICS
 ============================ */
 function getPerf() {
     try {
@@ -949,10 +960,9 @@ function sendPayload(sync = false) {
 ============================ */
 window.addEventListener("beforeunload", () => {
     focusTime += Date.now() - lastFocus;
-    sendPayload(true); // synchronous XHR
+    sendPayload(true);
 });
 </script>
-
 
 </body>
 </html>
