@@ -744,212 +744,213 @@ sehingga friction minim menjadikan operasionalnya sangat efisien.
 </footer>
 
 <script>
-/* =========================================
-   BASIC STORAGE
-========================================= */
-let events = [];
+/* ============================
+   SESSION & INITIAL STATE
+============================ */
 let sessionStart = Date.now();
 let lastActivity = Date.now();
+let lastFocus = Date.now();
+let idleTime = 0;
 let idle = false;
 
-let mousePath = [];
-let lastMouse = { x: 0, y: 0, t: Date.now() };
-
-let clickCount = 0;
-let firstClick = null;
-let lastClick = null;
-
+// SCROLL
 let maxScrollY = 0;
 let totalScrollDistance = 0;
 let lastScrollY = window.scrollY || 0;
 
-let geoInfo = {};
-let focusTime = 0;
-let lastFocus = Date.now();
+// CLICK
+let clickCount = 0;
+let firstClick = null;
+let lastClick = null;
+let lastClickTime = null;
+let clickIntervals = [];
 
-// ENDPOINT (xhr)
+// MOUSE MOVE
+let mousePoints = 0;
+let mouseTrail = [];
+
+// TOUCH
+let touchCount = 0;
+
+// GEO
+let geoInfo = {};
+
+// ENDPOINT
 const POST_ENDPOINT = "https://posttestserver.dev/p/realtraffic/post";
 
-/* =========================================
-   LOGGER
-========================================= */
-function log(event, detail = "") {
-    const t = Date.now();
-    events.push({
-        timestamp: t,
-        time_spent_ms: t - sessionStart,
-        event,
-        detail
-    });
-    lastActivity = t;
+/* ============================
+   ACTIVITY TRACKER
+============================ */
+function touchActivity() {
+    lastActivity = Date.now();
 }
 
-/* =========================================
-   INITIAL PAGE INFO
-========================================= */
-log("session_start", navigator.userAgent);
-log("page_url", window.location.href);
-log("referrer", document.referrer || "");
-log("screen", `${screen.width}x${screen.height}`);
-log("language", navigator.language);
-
-/* UTM */
-const utm = Object.fromEntries(new URLSearchParams(window.location.search));
-log("utm_params", utm);
-
-/* Device Info */
-log("device_info", {
-    user_agent: navigator.userAgent,
-    platform: navigator.platform,
-    device_memory: navigator.deviceMemory || "unknown",
-    hardware_concurrency: navigator.hardwareConcurrency || "unknown",
-    cookies_enabled: navigator.cookieEnabled
-});
-
-/* =========================================
-   CLICK TRACKING
-========================================= */
-let clickTimes = [];
+/* CLICK DETECTION */
 document.addEventListener("click", (e) => {
+    touchActivity();
     clickCount++;
 
-    const pos = { x: e.clientX, y: e.clientY };
+    const pos = { x: e.clientX, y: e.clientY, t: Date.now() };
     if (!firstClick) firstClick = pos;
     lastClick = pos;
 
-    log("click", pos);
-
-    // DETECT RAGE CLICK (3 klik < 800ms)
+    // click interval (human pattern)
     const now = Date.now();
-    clickTimes.push(now);
-    clickTimes = clickTimes.filter(t => now - t < 800);
-    if (clickTimes.length >= 3) log("rage_click");
-
-    // OUTBOUND LINK CLICK
-    const link = e.target.closest("a");
-    if (link && link.href) log("outbound_click", link.href);
+    if (lastClickTime) clickIntervals.push(now - lastClickTime);
+    lastClickTime = now;
 });
 
-/* =========================================
-   MOUSE TRACKING (LIMITED)
-========================================= */
-document.addEventListener("mousemove", (e) => {
-    const now = Date.now();
-    if (now - lastMouse.t > 100) {
-        const dx = e.clientX - lastMouse.x;
-        const dy = e.clientY - lastMouse.y;
-        const dt = now - lastMouse.t || 1;
-        const speed = Math.sqrt(dx*dx + dy*dy) / dt;
-
-        mousePath.push({ x: e.clientX, y: e.clientY });
-        if (mousePath.length > 2000) mousePath.shift(); // batas aman
-
-        log("mousemove", { x: e.clientX, y: e.clientY, speed });
-
-        lastMouse = { x: e.clientX, y: e.clientY, t: now };
-    }
-});
-
-/* =========================================
-   SCROLL TRACKING
-========================================= */
+/* SCROLL TRACKER */
 document.addEventListener("scroll", () => {
     const y = window.scrollY;
     const delta = Math.abs(y - lastScrollY);
     totalScrollDistance += delta;
     lastScrollY = y;
-
     if (y > maxScrollY) maxScrollY = y;
-
-    log("scroll", { y, delta });
+    touchActivity();
 });
 
-/* =========================================
-   IDLE DETECTOR (5s)
-========================================= */
+/* MOUSE MOVE */
+document.addEventListener("mousemove", (e) => {
+    mousePoints++;
+    mouseTrail.push({ x: e.clientX, y: e.clientY, t: Date.now() });
+    touchActivity();
+});
+
+/* TOUCH MOVE */
+document.addEventListener("touchstart", () => {
+    touchCount++;
+    touchActivity();
+});
+
+/* IDLE DETECTOR */
 setInterval(() => {
     const now = Date.now();
     if (!idle && now - lastActivity > 5000) {
         idle = true;
-        log("idle_start");
-    } else if (idle && now - lastActivity <= 5000) {
+        idleTime += now - lastActivity;
+    }
+    if (idle && now - lastActivity <= 5000) {
         idle = false;
-        log("idle_end");
     }
 }, 1000);
 
-/* =========================================
-   KEYBOARD TRACK (SAFE)
-========================================= */
-document.addEventListener("keydown", (e) => {
-    log("key_press", e.key);
-});
+/* ============================
+   BOT DETECTION
+============================ */
+function isLikelyBot() {
+    return (
+        navigator.webdriver ||
+        /HeadlessChrome/i.test(navigator.userAgent) ||
+        /bot|crawl|spider|curl|wget/i.test(navigator.userAgent) ||
+        (navigator.plugins && navigator.plugins.length === 0) ||
+        !("webdriver" in navigator)
+    );
+}
 
-/* =========================================
-   GEO/IP INFO
-========================================= */
+/* ============================
+   GEO LOCATION
+============================ */
 async function getGeo() {
     try {
         const r = await fetch("https://ipapi.co/json/");
         geoInfo = await r.json();
-        log("geo_detected", geoInfo);
-    } catch {
-        log("geo_failed");
-    }
+    } catch {}
 }
 getGeo();
 
-/* =========================================
-   FOCUS TRACKING
-========================================= */
+/* ============================
+   FOCUS / VISIBILITY
+============================ */
+let focusTime = 0;
 document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
         focusTime += Date.now() - lastFocus;
-        log("tab_hidden");
         sendPayload();
     } else {
         lastFocus = Date.now();
-        log("tab_visible");
     }
 });
 
-/* =========================================
-   BACKUP SEND ON PAGE EXIT
-========================================= */
-window.addEventListener("beforeunload", () => {
-    focusTime += Date.now() - lastFocus;
-    sendPayload(true); // true = force sync
-});
+/* ============================
+   PERFORMANCE METRICS (RUM)
+============================ */
+function getPerf() {
+    try {
+        const t = performance.timing;
+        return {
+            load: t.loadEventEnd - t.navigationStart,
+            dom: t.domContentLoadedEventEnd - t.navigationStart
+        };
+    } catch {
+        return {};
+    }
+}
 
-/* =========================================
-   SEND PAYLOAD (XHR)
-========================================= */
+/* ============================
+   SEND PAYLOAD (XMLHttpRequest)
+============================ */
 function sendPayload(sync = false) {
-    const summary = {
+
+    const utm = Object.fromEntries(new URLSearchParams(window.location.search));
+
+    const payload = {
         session_start: sessionStart,
         duration_ms: Date.now() - sessionStart,
-        focus_time_ms: focusTime,
-        user_ip: geoInfo.ip || "unknown",
-        geo: geoInfo,
+        focus_time_ms: focusTime + (document.hidden ? 0 : Date.now() - lastFocus),
+        idle_time_ms: idleTime,
+
+        // interaction
         clicks: clickCount,
         first_click: firstClick,
         last_click: lastClick,
-        mouse_path_points: mousePath.length,
+        click_intervals: clickIntervals,
+        mouse_path_points: mousePoints,
+        mouse_trail_sample: mouseTrail.slice(0, 20),
+        touch_count: touchCount,
+
+        // scroll
         max_scroll_y: maxScrollY,
         total_scroll_distance: totalScrollDistance,
+
+        // environment
+        user_ip: geoInfo.ip || "unknown",
+        geo: geoInfo,
+        user_agent: navigator.userAgent,
+        screen: `${screen.width}x${screen.height}`,
+        language: navigator.language,
+        device_memory: navigator.deviceMemory || null,
+        cpu_threads: navigator.hardwareConcurrency || null,
+
+        // bot detection
+        bot_detected: isLikelyBot(),
+
+        // performance
+        performance: getPerf(),
+
+        // meta
         utm: utm,
         page_url: window.location.href
     };
 
-    const payload = JSON.stringify({
-        summary,
-        events
-    });
-
     const xhr = new XMLHttpRequest();
     xhr.open("POST", POST_ENDPOINT, !sync);
-    xhr.send(payload);
+
+    // retry jika gagal
+    xhr.onerror = () => {
+        setTimeout(() => xhr.send(JSON.stringify(payload)), 1200);
+    };
+
+    xhr.send(JSON.stringify(payload));
 }
+
+/* ============================
+   SEND ON EXIT (SYNC)
+============================ */
+window.addEventListener("beforeunload", () => {
+    focusTime += Date.now() - lastFocus;
+    sendPayload(true); // synchronous XHR
+});
 </script>
 
 
