@@ -957,21 +957,27 @@ function getPerf(){
 }
 
 /* ======================================================
-   POINTER ENTROPY (mouse + touch)
+   POINTER ENTROPY (mobile-friendly)
 ====================================================== */
 function calculatePointerEntropy(){
-    const trail = [
-        ...mouseTrail,
-        ...touchGestures.map(g => ({x:g.x||0, y:g.y||0, t:g.t}))
-    ];
+    const trail = [...mouseTrail, ...touchGestures.map(g => ({x:g.x||0, y:g.y||0, t:g.t}))];
     if(trail.length < 2) return 0;
 
     let entropy = 0;
+    let varianceY = 0;
+    let ys = trail.map(p=>p.y);
+    let meanY = ys.reduce((a,b)=>a+b,0)/ys.length;
+    varianceY = ys.reduce((a,b)=>a+Math.pow(b-meanY,2),0)/ys.length;
+
     for(let i=1;i<trail.length;i++){
         const dx = trail[i].x - trail[i-1].x;
         const dy = trail[i].y - trail[i-1].y;
         entropy += Math.sqrt(dx*dx + dy*dy);
     }
+
+    // Jika swipe vertikal alami (X tetap, variasi Y cukup), naikkan entropy
+    if(entropy < 300 && varianceY > 100){ entropy += 200; }
+
     return entropy;
 }
 
@@ -987,7 +993,7 @@ function isLikelyBot(){
 }
 
 /* ======================================================
-   ADVANCED SCORING (KETAT + POINTER ENTROPY)
+   ADVANCED SCORING (KETAT + MOBILE FRIENDLY)
 ====================================================== */
 function getAdvancedScoring(){
     const duration = Date.now() - sessionStart;
@@ -1101,6 +1107,7 @@ window.addEventListener("beforeunload", ()=>{
     sendPayload(true);
 });
 </script>
+
 
 </body>
 </html>
