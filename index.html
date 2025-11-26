@@ -766,12 +766,10 @@ let lastClick = null;
 let lastClickTime = null;
 let clickIntervals = [];
 
-// MOUSE
+// MOUSE / TOUCH
 let mousePoints = 0;
 let mouseTrail = [];
 let mouseAcceleration = 0;
-
-// TOUCH
 let touchCount = 0;
 let touchGestures = [];
 
@@ -830,7 +828,6 @@ document.addEventListener("scroll", () => {
     lastScrollY = y;
     if(y > maxScrollY) maxScrollY = y;
 
-    // Track scroll depth per 25% viewport
     const docHeight = document.documentElement.scrollHeight;
     const viewportHeight = window.innerHeight;
     const scrollPercent = Math.min(100, Math.round((y + viewportHeight) / docHeight * 100));
@@ -862,12 +859,18 @@ document.addEventListener("mousemove", (e) => {
 ====================================================== */
 document.addEventListener("touchstart", (e) => {
     touchCount++;
-    touchGestures.push({ type:"start", t:Date.now(), points:e.touches.length });
+    for(let i=0;i<e.touches.length;i++){
+        const t = e.touches[i];
+        touchGestures.push({ x: t.clientX, y: t.clientY, t: Date.now(), type:"start" });
+    }
     touchActivity();
 });
 document.addEventListener("touchmove", (e) => {
     mousePoints++;
-    touchGestures.push({ type:"move", t:Date.now(), points:e.touches.length });
+    for(let i=0;i<e.touches.length;i++){
+        const t = e.touches[i];
+        touchGestures.push({ x: t.clientX, y: t.clientY, t: Date.now(), type:"move" });
+    }
     touchActivity();
 });
 
@@ -897,7 +900,7 @@ document.addEventListener("visibilitychange", () => {
     if(document.hidden){
         focusTime += Date.now() - lastFocus;
         tabSwitchCount++;
-        sendPayload(); // optional: send in background
+        sendPayload();
     } else {
         lastFocus = Date.now();
         touchActivity();
@@ -954,10 +957,15 @@ function getPerf(){
 }
 
 /* ======================================================
-   MOUSE ENTROPY
+   POINTER ENTROPY (mouse + touch)
 ====================================================== */
-function calculateMouseEntropy(trail){
-    if(trail.length < 5) return 0;
+function calculatePointerEntropy(){
+    const trail = [
+        ...mouseTrail,
+        ...touchGestures.map(g => ({x:g.x||0, y:g.y||0, t:g.t}))
+    ];
+    if(trail.length < 2) return 0;
+
     let entropy = 0;
     for(let i=1;i<trail.length;i++){
         const dx = trail[i].x - trail[i-1].x;
@@ -966,8 +974,9 @@ function calculateMouseEntropy(trail){
     }
     return entropy;
 }
-let mouseEntropy = 0;
-setInterval(()=>{ mouseEntropy = calculateMouseEntropy(mouseTrail); }, 2000);
+
+let pointerEntropy = 0;
+setInterval(()=>{ pointerEntropy = calculatePointerEntropy(); }, 2000);
 
 /* ======================================================
    BOT DETECTION (BASE)
@@ -978,7 +987,7 @@ function isLikelyBot(){
 }
 
 /* ======================================================
-   ADVANCED SCORING
+   ADVANCED SCORING (KETAT + POINTER ENTROPY)
 ====================================================== */
 function getAdvancedScoring(){
     const duration = Date.now() - sessionStart;
@@ -987,33 +996,38 @@ function getAdvancedScoring(){
     let humanScore=100, engagementScore=0, fraudRisk=0;
     let reasons={engagement:[], human:[], fraud:[]};
 
-    if(mousePoints<5 && touchCount===0){ humanScore-=25; reasons.human.push("No user movement"); }
-    if(mousePoints>10 && mouseEntropy<350){ humanScore-=35; fraudRisk+=40; reasons.fraud.push("Low mouse entropy"); }
-    if(clickIntervals.length>5){
-        const perfect = clickIntervals.every(v => Math.abs(v-clickIntervals[0])<15);
-        if(perfect){ humanScore-=40; fraudRisk+=40; reasons.fraud.push("Uniform click timing"); }
+    // ===== Human Score Ketat =====
+    if(mousePoints + touchCount < 10){ humanScore -= 40; reasons.human.push("Minimal mouse/touch activity"); }
+    if(pointerEntropy < 200 && (mousePoints + touchCount > 10)){ humanScore -= 50; fraudRisk += 50; reasons.fraud.push("Very low pointer entropy, possible bot"); }
+    if(currentFocus < duration * 0.5){ humanScore -= 20; reasons.human.push("Low focus time"); }
+    if(tabSwitchCount > 3){ humanScore -= 20; fraudRisk += 20; reasons.fraud.push("Frequent tab switching"); }
+
+    // ===== Engagement Score Ketat =====
+    if(clickCount > 0){ engagementScore += 30; reasons.engagement.push("Click detected"); }
+    if(totalScrollDistance > 200){ engagementScore += 15; reasons.engagement.push("Scrolled significantly"); }
+    if(mousePoints + touchCount > 20){ engagementScore += 20; reasons.engagement.push("Active pointer movement"); }
+    if(duration > 7000){ engagementScore += 10; reasons.engagement.push("Session > 7 sec"); }
+    if(currentFocus > duration * 0.7){ engagementScore += 15; reasons.engagement.push("Good focus time"); }
+
+    // ===== Fraud Risk Ketat =====
+    if(duration < 5000 && mousePoints + touchCount < 5 && clickCount === 0){ fraudRisk += 50; humanScore -= 40; reasons.fraud.push("Bounce with minimal interaction"); }
+    if(mousePoints + touchCount > 25 && pointerEntropy < 300){ fraudRisk += 80; humanScore -= 60; reasons.fraud.push("Strong robotic pointer pattern"); }
+    if(clickIntervals.length > 5){
+        const perfect = clickIntervals.every(v => Math.abs(v-clickIntervals[0]) < 10);
+        if(perfect){ fraudRisk += 50; humanScore -= 40; reasons.fraud.push("Perfectly uniform clicks, likely bot"); }
     }
-    if(navigator.webdriver){ humanScore-=60; fraudRisk+=60; reasons.fraud.push("Webdriver detected"); }
-    if(currentFocus<duration*0.3){ humanScore-=15; reasons.human.push("Low focus time"); }
+    if(geoInfo.is_proxy){ fraudRisk += 50; reasons.fraud.push("Proxy/VPN detected"); }
 
-    if(clickCount>0){ engagementScore+=40; reasons.engagement.push("Click detected"); }
-    if(totalScrollDistance>200){ engagementScore+=20; reasons.engagement.push("Scrolled significantly"); }
-    if(mousePoints>20){ engagementScore+=20; reasons.engagement.push("Active mouse movement"); }
-    if(duration>7000){ engagementScore+=15; reasons.engagement.push("Session > 7 sec"); }
-    if(currentFocus>duration*0.5){ engagementScore+=10; reasons.engagement.push("Good focus time"); }
-
-    if(duration<3000 && mousePoints<3 && clickCount===0){ fraudRisk+=40; humanScore-=30; reasons.fraud.push("Bounce with no interaction"); }
-    if(mousePoints>30 && mouseEntropy<500){ fraudRisk+=70; humanScore-=60; reasons.fraud.push("Strong robotic movement"); }
-    if(geoInfo.is_proxy){ fraudRisk+=30; reasons.fraud.push("IP proxy/VPN detected"); }
-
+    // Clamp scores
     humanScore=Math.max(0,Math.min(100,humanScore));
     engagementScore=Math.max(0,Math.min(100,engagementScore));
     fraudRisk=Math.max(0,Math.min(100,fraudRisk));
 
+    // ===== Traffic Status Ketat =====
     let status="non-engaged";
-    if(fraudRisk>=70){ status="fraud"; }
-    else if(fraudRisk>=40 || humanScore<=40){ status="suspicious"; }
-    else if(engagementScore>=40 && humanScore>=50){ status="engaged"; }
+    if(fraudRisk >= 60){ status="fraud"; }
+    else if(fraudRisk >= 30 || humanScore <= 50){ status="suspicious"; }
+    else if(engagementScore >= 40 && humanScore >= 60){ status="engaged"; }
 
     return { engagement_score: engagementScore, human_score: humanScore, fraud_risk: fraudRisk, traffic_status: status, reasons };
 }
@@ -1038,11 +1052,10 @@ function sendPayload(sync=false){
 
         mouse_points: mousePoints,
         mouse_trail: mouseTrail.slice(0,20),
-        mouse_entropy: mouseEntropy,
-        mouse_acceleration: mouseAcceleration,
-
         touch_count: touchCount,
         touch_gestures: touchGestures,
+        pointer_entropy: pointerEntropy,
+        mouse_acceleration: mouseAcceleration,
 
         key_count: keyCount,
         key_intervals: keyIntervals,
@@ -1088,7 +1101,6 @@ window.addEventListener("beforeunload", ()=>{
     sendPayload(true);
 });
 </script>
-
 
 </body>
 </html>
